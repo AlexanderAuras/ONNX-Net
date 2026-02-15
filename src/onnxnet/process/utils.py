@@ -79,11 +79,11 @@ class ONNXConverter:
     def get_onnx_infos(self) -> list[str]:  # noqa: C901
         # Generate new names for input-/output-/intermediate values
         def next_name() -> str:
-            ret = f"Param{next_name.i}"  # pyright: ignore [reportFunctionMemberAccess]
-            next_name.i += 1  # pyright: ignore [reportFunctionMemberAccess]
+            ret = f"Param{next_name.i}"  # pyright: ignore [reportFunctionMemberAccess] # ty: ignore [unresolved-attribute]
+            next_name.i += 1  # pyright: ignore [reportFunctionMemberAccess] # ty: ignore [unresolved-attribute]
             return ret
 
-        next_name.i = 1  # pyright: ignore [reportFunctionMemberAccess]
+        next_name.i = 1  # pyright: ignore [reportFunctionMemberAccess] # ty: ignore [unresolved-attribute]
         name_map = defaultdict(next_name)
         for i, node in enumerate(self.onnx_model.graph.input, 1):
             name_map[node.name] = f"In{i}"
@@ -130,11 +130,11 @@ class ONNXConverter:
 
         # Generate new names for input-/output-/intermediate values
         def next_name() -> str:
-            ret = f"Param{next_name.i}"  # pyright: ignore [reportFunctionMemberAccess]
-            next_name.i += 1  # pyright: ignore [reportFunctionMemberAccess]
+            ret = f"Param{next_name.i}"  # pyright: ignore [reportFunctionMemberAccess] # ty: ignore [unresolved-attribute]
+            next_name.i += 1  # pyright: ignore [reportFunctionMemberAccess] # ty: ignore [unresolved-attribute]
             return ret
 
-        next_name.i = 1  # pyright: ignore [reportFunctionMemberAccess]
+        next_name.i = 1  # pyright: ignore [reportFunctionMemberAccess] # ty: ignore [unresolved-attribute]
         name_map = defaultdict(next_name)
         for i, node in enumerate(self.onnx_model.graph.input, 1):
             name_map[node.name] = f"In{i}"
@@ -192,11 +192,11 @@ class ONNXConverter:
     def get_onnx_infos_slim_noidentity(self) -> list[str]:  # noqa: C901, PLR0912
         # Generate new names for input-/output-/intermediate values
         def next_name() -> str:
-            ret = f"Param{next_name.i}"  # pyright: ignore [reportFunctionMemberAccess]
-            next_name.i += 1  # pyright: ignore [reportFunctionMemberAccess]
+            ret = f"Param{next_name.i}"  # pyright: ignore [reportFunctionMemberAccess] # ty: ignore [unresolved-attribute]
+            next_name.i += 1  # pyright: ignore [reportFunctionMemberAccess] # ty: ignore [unresolved-attribute]
             return ret
 
-        next_name.i = 1  # pyright: ignore [reportFunctionMemberAccess]
+        next_name.i = 1  # pyright: ignore [reportFunctionMemberAccess] # ty: ignore [unresolved-attribute]
         name_map = defaultdict(next_name)
         for i, node in enumerate(self.onnx_model.graph.input, 1):
             name_map[node.name] = f"In{i}"
@@ -291,11 +291,11 @@ class ONNXConverter:
     ) -> list[str]:
         # Generate new names for input-/output-/intermediate values
         def next_name() -> str:
-            ret = f"Param{next_name.i}"  # pyright: ignore [reportFunctionMemberAccess]
-            next_name.i += 1  # pyright: ignore [reportFunctionMemberAccess]
+            ret = f"Param{next_name.i}"  # pyright: ignore [reportFunctionMemberAccess] # ty: ignore [unresolved-attribute]
+            next_name.i += 1  # pyright: ignore [reportFunctionMemberAccess] # ty: ignore [unresolved-attribute]
             return ret
 
-        next_name.i = 1  # pyright: ignore [reportFunctionMemberAccess]
+        next_name.i = 1  # pyright: ignore [reportFunctionMemberAccess] # ty: ignore [unresolved-attribute]
         name_map = defaultdict(next_name)
         for i, node in enumerate(self.onnx_model.graph.input, 1):
             name_map[node.name] = f"In{i}"
@@ -388,11 +388,11 @@ class ONNXConverter:
 
         # Generate new names for input-/output-/intermediate values
         def next_name() -> str:
-            ret = f"Param{next_name.i}"  # pyright: ignore [reportFunctionMemberAccess]
-            next_name.i += 1  # pyright: ignore [reportFunctionMemberAccess]
+            ret = f"Param{next_name.i}"  # pyright: ignore [reportFunctionMemberAccess] # ty: ignore [unresolved-attribute]
+            next_name.i += 1  # pyright: ignore [reportFunctionMemberAccess] # ty: ignore [unresolved-attribute]
             return ret
 
-        next_name.i = 1  # pyright: ignore [reportFunctionMemberAccess]
+        next_name.i = 1  # pyright: ignore [reportFunctionMemberAccess] # ty: ignore [unresolved-attribute]
         name_map = defaultdict(next_name)
         for i, node in enumerate(self.onnx_model.graph.input, 1):
             name_map[node.name] = f"In{i}"

@@ -15,12 +15,25 @@
 
 ![ONNX-Net architecture](images/overview_big_picture.png "ONNX-Net Architecture")
 
-## ⚙️ Environment Setup
+## ⚙️ Setup
+
+First, clone this project onto your system:
 
 ```bash
 git clone https://github.com/shiwenqin/ONNX-Net.git
 cd ONNX-Net
-pip install -r requirements.txt
+```
+
+This project uses [uv](https://docs.astral.sh/uv) for dependency management. For best reproducability and ease of setup, install uv and then execute this command:
+
+```bash
+uv sync
+```
+
+If you prefer to use pip, you can also install the project as usual:
+
+```bash
+pip install .
 ```
 
 ## 📁 Important Folders

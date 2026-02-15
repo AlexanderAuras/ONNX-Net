@@ -5,8 +5,19 @@ from pathlib import Path
 from typing import Any, cast
 
 from accelerate import Accelerator
-from datasets import Dataset
-from losses import (
+import numpy as np
+import numpy.typing as npt
+import pandas as pd
+from scipy import stats
+from sklearn.metrics import mean_absolute_error
+import torch
+from transformers import AutoTokenizer, DataCollatorWithPadding
+from transformers.models.auto.modeling_auto import AutoModelForSequenceClassification
+from transformers.trainer import Trainer
+from transformers.trainer_utils import set_seed
+from transformers.training_args import TrainingArguments
+
+from onnxnet.losses import (
     HuberTrainer,
     MSECapTrainer,
     PairwiseLogTrainer,
@@ -18,18 +29,7 @@ from losses import (
     PWRTrainer,
     SoftmaxListwiseTrainer,
 )
-import numpy as np
-import numpy.typing as npt
-import pandas as pd
-from scipy import stats
-from sklearn.metrics import mean_absolute_error
-import torch
-from transformers.models.auto.modeling_auto import AutoModelForSequenceClassification
-from transformers.models.auto.tokenization_auto import AutoTokenizer
-from transformers.trainer import Trainer
-from transformers.trainer_utils import set_seed
-from transformers.training_args import TrainingArguments
-
+from onnxnet.onnx_dataset import ONNXDataset
 import wandb
 
 
@@ -38,7 +38,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 parser = argparse.ArgumentParser()
 
 # Model params
-parser.add_argument("--model_name", type=str, default="answerdotai/ModernBERT-base")
+parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-0.6B")
+parser.add_argument("--adv-pos-enc", action="store_true")
 
 # Data params
 parser.add_argument("--data_path", type=Path)
@@ -83,7 +84,7 @@ parser.add_argument(
         "poly1list",
     ],
 )
-parser.add_argument("--eval_strategy", type=str, default="epoch", choices=["steps", "epoch"])
+parser.add_argument("--eval_strategy", type=str, default="epoch", choices=["steps", "epoch", "no"])
 parser.add_argument("--flash_attention", type=bool, default=False)
 parser.add_argument("--gradient_checkpointing", type=bool, default=False)
 
@@ -101,10 +102,11 @@ run_name = f"eval_task{args.eval_task}_train_task{args.train_task}_{args.loss_fn
 
 accelerator = Accelerator()
 if accelerator.is_main_process:
-    wandb.init(
+    _ = wandb.init(
         project=args.wandb_project,
         config=vars(args),
         name=run_name,
+        mode="disabled",  # TODO Change back
     )
 
 # Reproducibility
@@ -112,55 +114,42 @@ set_seed(args.seed, deterministic=True)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
+# if args.train_task != "none" and args.eval_task != "none":
+#    msg = "Train task and eval task cannot be set at the same time"
+#    raise ValueError(msg)
+
 if not args.data_path.exists():
-    msg = f"Data path {args.data_path} does not exist"
+    msg = f'Data path "{args.data_path}" does not exist'
     raise FileNotFoundError(msg)
-
-if args.data_path.name.endswith(".csv"):
-    train_df = pd.read_csv(args.data_path)
-else:
-    train_df = pd.read_csv(args.data_path / "train.csv")
-
-if args.train_size is not None and args.train_size < len(train_df):
-    train_df = train_df.sample(n=args.train_size, random_state=args.seed)
-# stratify sample 10% training data
-# train_df = train_df.sample(frac=0.1, random_state=42)
-if args.eval_path is not None:
-    val_df = pd.read_csv(args.eval_path)
-else:
-    val_df = pd.read_csv(args.data_path / "val.csv")
-
-if args.train_task != "none" and args.eval_task != "none":
-    msg = "Train task and eval task cannot be set at the same time"
+if args.data_path.is_file():
+    msg = f'Data path "{args.data_path}" is a file, expected a directory'
     raise ValueError(msg)
+if not args.data_path.joinpath(args.train_task, "train").exists():
+    msg = f'Data path "{args.data_path.joinpath(args.train_task, "train")}"' + " does not exist"
+    raise FileNotFoundError(msg)
+if args.data_path.joinpath(args.train_task, "train").is_file():
+    msg = f'Data path "{args.data_path.joinpath(args.train_task, "train")}"' + " is a file, expected a directory"
+    raise ValueError(msg)
+train_dataset = ONNXDataset(args.data_path.joinpath(args.train_task, "train"))
+if args.train_size is not None and args.train_size < len(train_dataset):
+    train_dataset = torch.utils.data.Subset(
+        train_dataset,
+        indices=np.random.RandomState(seed=args.seed).choice(len(train_dataset), size=args.train_size, replace=False),
+    )
 
-if args.eval_task != "none":
-    train_df = train_df[~(train_df["dataset"] == args.eval_task)]
-if args.train_task != "none":
-    train_df = train_df[train_df["dataset"] == args.train_task]
-
-train_df = train_df[["onnx_encoding", "accuracy", "dataset"]].reset_index(drop=True)
-val_df = val_df[["onnx_encoding", "accuracy", "dataset"]].reset_index(drop=True)
-
-train_ds = Dataset.from_pandas(train_df).rename_column("accuracy", "labels")
-val_ds = Dataset.from_pandas(val_df).rename_column("accuracy", "labels")
-# only keep the onnx_encoding and labels columns
-train_ds = train_ds.remove_columns([col for col in train_ds.column_names if col not in {"onnx_encoding", "labels"}])
-val_ds = val_ds.remove_columns([col for col in val_ds.column_names if col not in {"onnx_encoding", "labels"}])
-print(f"Train size: {len(train_ds)}, Val size: {len(val_ds)}")
-
-tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-tokenizer.padding_side = "left" if args.model_name == "Qwen/Qwen3-0.6B" else "right"
-if tokenizer.pad_token is None:
-    tokenizer.pad_token = tokenizer.eos_token
-
-
-def tokenize_function(examples: dict[str, list[Any]]) -> dict[str, list[Any]]:
-    return tokenizer(examples["onnx_encoding"], padding="longest", truncation=True)
-
-
-train_ds = train_ds.map(tokenize_function, batched=True)
-val_ds = val_ds.map(tokenize_function, batched=True)
+if not args.eval_path.exists():
+    msg = f'Eval path "{args.eval_path}" does not exist'
+    raise FileNotFoundError(msg)
+if args.eval_path.is_file():
+    msg = f'Eval path "{args.eval_path}" is a file, expected a directory'
+    raise ValueError(msg)
+if not args.eval_path.joinpath(args.eval_task, "val").exists():
+    msg = f'Eval path "{args.eval_path.joinpath(args.eval_task, "val")}"' + " does not exist"
+    raise FileNotFoundError(msg)
+if args.eval_path.joinpath(args.eval_task, "val").is_file():
+    msg = f'Eval path "{args.eval_path.joinpath(args.eval_task, "val")}"' + " is a file, expected a directory"
+    raise ValueError(msg)
+val_dataset = ONNXDataset(args.eval_path.joinpath(args.eval_task, "val"))
 
 model = AutoModelForSequenceClassification.from_pretrained(
     args.model_name,
@@ -168,8 +157,6 @@ model = AutoModelForSequenceClassification.from_pretrained(
     problem_type="regression",
     attn_implementation="flash_attention_2" if args.flash_attention else "sdpa",
 ).to(device)
-if model.config.pad_token_id is None:
-    model.config.pad_token_id = tokenizer.eos_token_id
 
 
 def compute_metrics(eval_preds: tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]) -> dict[str, float]:
@@ -207,20 +194,23 @@ training_args = TrainingArguments(
     save_strategy=args.eval_strategy,
     run_name=run_name,
     load_best_model_at_end=True,
-    save_steps=800 if args.eval_strategy == "steps" else None,  # pyright: ignore [reportArgumentType]
+    save_steps=800 if args.eval_strategy == "steps" else None,  # pyright: ignore [reportArgumentType] # ty: ignore [invalid-argument-type]
     metric_for_best_model="kendall_corr",
     greater_is_better=True,
     bf16_full_eval=True,
     gradient_checkpointing=args.gradient_checkpointing,
 )
 
+tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+data_collator = DataCollatorWithPadding(tokenizer)
 universal_trainer_params = {
     "model": model,
     "args": training_args,
-    "train_dataset": train_ds,
-    "eval_dataset": val_ds,
-    "processing_class": tokenizer,
+    "train_dataset": train_dataset,
+    "eval_dataset": val_dataset,
+    # "processing_class": tokenizer,
     "compute_metrics": compute_metrics,
+    "data_collator": data_collator,
 }
 if args.loss_fn == "mse":
     trainer = Trainer(**universal_trainer_params)
@@ -233,13 +223,13 @@ elif args.loss_fn == "pwr":
 # elif args.loss_fn == 'spearman':
 #     trainer = SpearmanTrainer(**universal_trainer_params, tau=1.0)
 elif args.loss_fn == "pwr_mining":
-    trainer = PWRMiningTrainer(**universal_trainer_params, mining_mode="topk")
+    trainer = PWRMiningTrainer(**universal_trainer_params, mining_mode="topk")  # ty: ignore [invalid-argument-type]
 elif args.loss_fn == "pairlog":
     trainer = PairwiseLogTrainer(**universal_trainer_params)
 elif args.loss_fn == "softmaxlist":
-    trainer = SoftmaxListwiseTrainer(**universal_trainer_params)
+    trainer = SoftmaxListwiseTrainer(**universal_trainer_params)  # ty: ignore [invalid-argument-type]
 elif args.loss_fn == "poly1list":
-    trainer = Poly1ListwiseTrainer(**universal_trainer_params)
+    trainer = Poly1ListwiseTrainer(**universal_trainer_params)  # ty: ignore [invalid-argument-type]
 # elif args.loss_fn == 'plackett':
 #     trainer = PlackettTrainer(**universal_trainer_params)
 # elif args.loss_fn == 'approxrank':
@@ -252,8 +242,8 @@ trainer.train()
 
 # Pred & Save
 if args.save_pred:
-    preds = trainer.predict(cast("torch.utils.data.Dataset[dict[str, Any]]", val_ds))
-    preds = pd.DataFrame(cast("npt.NDArray[np.float64]", preds.predictions).flatten(), columns=["pred"])
-    preds["true"] = val_df["accuracy"]
-    preds["dataset"] = val_df["dataset"]
+    preds = trainer.predict(cast("torch.utils.data.Dataset[dict[str, Any]]", val_dataset))
+    preds = pd.DataFrame(cast("npt.NDArray[np.float64]", preds.predictions).flatten(), columns=["pred"])  # ty: ignore [invalid-argument-type]
+    preds["true"] = [x["accuracy"] for x in val_dataset]
+    preds["dataset"] = [x["dataset"] for x in val_dataset]
     preds.to_csv(output_dir / "preds.csv", index=False)
