@@ -11,6 +11,7 @@ import pandas as pd
 from scipy import stats
 from sklearn.metrics import mean_absolute_error
 import torch
+import torch.nn.functional as F  # noqa: N812
 from transformers import AutoTokenizer, DataCollatorWithPadding
 from transformers.models.auto.modeling_auto import AutoModelForSequenceClassification
 from transformers.trainer import Trainer
@@ -30,6 +31,7 @@ from onnxnet.losses import (
     SoftmaxListwiseTrainer,
 )
 from onnxnet.onnx_dataset import ONNXDataset
+from onnxnet.transform_dataset import TransformDataset
 import wandb
 
 
@@ -45,18 +47,6 @@ parser.add_argument("--adv-pos-enc", action="store_true")
 parser.add_argument("--data_path", type=Path)
 parser.add_argument("--eval_path", type=Path, default=None)
 parser.add_argument("--seed", type=int, default=42)
-parser.add_argument(
-    "--train_task",
-    type=str,
-    default="none",
-    choices=["einspace", "hnasbench201", "nasbench101", "nas201nats", "nasbench301", "none"],
-)
-parser.add_argument(
-    "--eval_task",
-    type=str,
-    default="none",
-    choices=["einspace", "hnasbench201", "nasbench101", "nas201nats", "nasbench301", "none"],
-)
 parser.add_argument("--train_size", type=int, default=None)
 
 # Train params
@@ -97,7 +87,7 @@ parser.add_argument("--save_pred", type=bool, default=True)
 args = parser.parse_args()
 
 data_name = args.data_path.name
-run_name = f"eval_task{args.eval_task}_train_task{args.train_task}_{args.loss_fn}_{data_name}\
+run_name = f"eval_task{args.eval_path.name}_train_task{args.data_path.name}_{args.loss_fn}_{data_name}\
              _seed{args.seed}_lr{args.lr}_epochs{args.epochs}_frac42"
 
 accelerator = Accelerator()
@@ -114,42 +104,54 @@ set_seed(args.seed, deterministic=True)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
-# if args.train_task != "none" and args.eval_task != "none":
-#    msg = "Train task and eval task cannot be set at the same time"
-#    raise ValueError(msg)
+tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+pe_projection = torch.randn(512, 256)
+
+
+def transform_sample(sample: dict[str, Any]) -> dict[str, Any]:
+    model_str = sample["model_str"]
+    char_ids = sample["char_ids"]
+    pos_enc = torch.from_numpy(sample["positional_encodings"]).to(torch.get_default_dtype())
+    accuracy = sample["accuracy"]
+    pos_enc = F.pad(pos_enc[:, :256], (0, max(0, 256 - pos_enc.shape[1])))
+    pos_enc = (pe_projection @ pos_enc[..., None])[..., 0]
+
+    tokenized = tokenizer(model_str, truncation=True, return_offsets_mapping=True)
+    token_pes = []
+    for start, _ in tokenized.offset_mapping:
+        token_pes.append(pos_enc[char_ids[start]])
+    token_pes = torch.stack(token_pes, dim=0)
+
+    return {
+        "input_ids": tokenized.input_ids,
+        "attention_mask": tokenized.attention_mask,
+        "token_pes": token_pes,
+        "labels": accuracy,
+    }
+
 
 if not args.data_path.exists():
-    msg = f'Data path "{args.data_path}" does not exist'
+    msg = f'Data path "{args.data_path.joinpath("train.csv")}"' + " does not exist"
     raise FileNotFoundError(msg)
 if args.data_path.is_file():
-    msg = f'Data path "{args.data_path}" is a file, expected a directory'
+    msg = f'Data path "{args.data_path.joinpath("train.csv")}"' + " is a file, expected a directory"
     raise ValueError(msg)
-if not args.data_path.joinpath(args.train_task, "train").exists():
-    msg = f'Data path "{args.data_path.joinpath(args.train_task, "train")}"' + " does not exist"
-    raise FileNotFoundError(msg)
-if args.data_path.joinpath(args.train_task, "train").is_file():
-    msg = f'Data path "{args.data_path.joinpath(args.train_task, "train")}"' + " is a file, expected a directory"
-    raise ValueError(msg)
-train_dataset = ONNXDataset(args.data_path.joinpath(args.train_task, "train"))
+train_dataset = ONNXDataset(args.data_path.joinpath("train.csv"))
 if args.train_size is not None and args.train_size < len(train_dataset):
     train_dataset = torch.utils.data.Subset(
         train_dataset,
         indices=np.random.RandomState(seed=args.seed).choice(len(train_dataset), size=args.train_size, replace=False),
     )
+train_dataset = TransformDataset(train_dataset, transform=transform_sample)
 
 if not args.eval_path.exists():
-    msg = f'Eval path "{args.eval_path}" does not exist'
+    msg = f'Eval path "{args.eval_path.joinpath("val.csv")}"' + " does not exist"
     raise FileNotFoundError(msg)
 if args.eval_path.is_file():
-    msg = f'Eval path "{args.eval_path}" is a file, expected a directory'
+    msg = f'Eval path "{args.eval_path.joinpath("val.csv")}"' + " is a file, expected a directory"
     raise ValueError(msg)
-if not args.eval_path.joinpath(args.eval_task, "val").exists():
-    msg = f'Eval path "{args.eval_path.joinpath(args.eval_task, "val")}"' + " does not exist"
-    raise FileNotFoundError(msg)
-if args.eval_path.joinpath(args.eval_task, "val").is_file():
-    msg = f'Eval path "{args.eval_path.joinpath(args.eval_task, "val")}"' + " is a file, expected a directory"
-    raise ValueError(msg)
-val_dataset = ONNXDataset(args.eval_path.joinpath(args.eval_task, "val"))
+val_dataset = ONNXDataset(args.eval_path.joinpath("val.csv"))
+val_dataset = TransformDataset(val_dataset, transform=transform_sample)
 
 model = AutoModelForSequenceClassification.from_pretrained(
     args.model_name,
@@ -201,7 +203,7 @@ training_args = TrainingArguments(
     gradient_checkpointing=args.gradient_checkpointing,
 )
 
-tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+
 data_collator = DataCollatorWithPadding(tokenizer)
 universal_trainer_params = {
     "model": model,

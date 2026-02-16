@@ -13,7 +13,6 @@ import numpy as np
 import numpy.typing as npt
 import onnx
 import onnxsim
-from pydot import cast
 import tqdm
 import tqdm.contrib.logging
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
@@ -42,35 +41,26 @@ def _process_onnx_file(args: tuple[argparse.Namespace, Path, PreTrainedTokenizer
         return
     try:
         acc = float(onnx_model.metadata_props[0].value)
-        tknzer_outp = args[2](model_str, truncation=True, return_offsets_mapping=True)
         with (
             lock,  # ty: ignore [unresolved-reference]
             args[0].out_dir.joinpath("metadata.csv").open("a", encoding="UTF-8", newline="") as f,
         ):
             csvwriter = csv.writer(f)
             if f.tell() == 0:
-                csvwriter.writerow(["file_path", "accuracy", "num_tokens", "dataset"])
+                csvwriter.writerow(["file_path", "accuracy", "dataset"])
             csvwriter.writerow([
                 args[1].relative_to(args[0].in_dir).with_suffix("").as_posix(),
                 acc,
-                len(cast("list[int]", tknzer_outp["input_ids"])),
                 "cifar10",
             ])
-        base_file_name = args[1].relative_to(args[0].in_dir).with_suffix("").as_posix()
-        with args[0].out_dir.joinpath(base_file_name).with_suffix(".ndid").open("wb") as f:
-            token_node_ids = []
-            for start, end in cast("list[tuple[int, int]]", tknzer_outp["offset_mapping"]):
-                if start == end == 0:
-                    token_node_ids.append(None)
-                else:
-                    token_node_ids.append(char_node_ids[start])
-            pickle.dump(token_node_ids, f)
-        del tknzer_outp["offset_mapping"]
-        with args[0].out_dir.joinpath(base_file_name).with_suffix(".tkid").open("wb") as f:
-            pickle.dump(tknzer_outp, f)
+        rel_path = args[1].relative_to(args[0].in_dir).with_suffix("").as_posix()
+        with args[0].out_dir.joinpath(rel_path).with_suffix(".mstr").open("w", encoding="UTF-8") as f:
+            f.write(model_str)
+        with args[0].out_dir.joinpath(rel_path).with_suffix(".chid").open("wb") as f:
+            pickle.dump(char_node_ids, f)
         pos_enc = np.pad(pos_enc[:, :256], [(0, 0), (0, max(0, 256 - pos_enc.shape[1]))])
         pos_enc = args[3] @ pos_enc[..., None]
-        np.save(args[0].out_dir.joinpath(base_file_name).with_suffix(""), pos_enc[..., 0])
+        np.save(args[0].out_dir.joinpath(rel_path).with_suffix(""), pos_enc[..., 0])
     except Exception as e:
         logger = logging.getLogger(__name__)
         logger.error('Error saving preprocessing results for file "%s": %s', args[1], e, exc_info=e)  # noqa: TRY400

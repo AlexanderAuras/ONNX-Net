@@ -9,16 +9,21 @@ from torch.utils.data import Dataset
 
 class ONNXDataset(Dataset[dict[str, Any]]):
     def __init__(self, path: Path | str) -> None:
-        self.__path = Path(path)
-        if not self.__path.exists() or not self.__path.is_dir():
-            msg = f'Invalid dataset directory "{self.__path}"'
+        path = Path(path)
+        self.__path = path.parent
+        if not path.exists() or not path.is_file():
+            msg = f'Invalid dataset file "{path}"'
             raise FileNotFoundError(msg)
         self.__metadata = []
-        with self.__path.joinpath("metadata.csv").open("r", encoding="UTF-8") as f:
+        with path.open("r", encoding="UTF-8") as f:
             csv_reader = csv.reader(f)
             next(csv_reader)  # skip header
             for row in csv_reader:
-                self.__metadata.append({"file": row[0], "accuracy": row[1], "tokens": row[2], "dataset": row[3]})
+                self.__metadata.append({
+                    "file": self.__path.joinpath(row[0]),
+                    "accuracy": float(row[1]),
+                    "dataset": row[2],
+                })
 
     def __len__(self) -> int:
         return len(self.__metadata)
@@ -26,20 +31,17 @@ class ONNXDataset(Dataset[dict[str, Any]]):
     @override
     def __getitem__(self, idx: int) -> dict[str, Any]:  # ty: ignore [invalid-method-override]
         metadata = self.__metadata[idx]
-        rel_path = Path(metadata["file"])
+        path = metadata["file"]
         accuracy = metadata["accuracy"]
-        num_tokens = metadata["tokens"]
         dataset = metadata["dataset"]
-        with self.__path.joinpath(rel_path).with_suffix(".tkid").open("rb") as f:
-            tknzr_outp = pickle.load(f)  # noqa: S301
-        with self.__path.joinpath(rel_path).with_suffix(".ndid").open("rb") as f:
-            node_ids = pickle.load(f)  # noqa: S301
-        pos_enc = np.load(self.__path.joinpath(rel_path).with_suffix(".npy"))
+        model_str = path.with_suffix(".mstr").read_text()
+        with path.with_suffix(".chid").open("rb") as f:
+            char_ids = pickle.load(f)  # noqa: S301
+        pos_enc = np.load(path.with_suffix(".npy"))
         return {
-            **tknzr_outp,
-            "node_ids": node_ids,
+            "model_str": model_str,
+            "char_ids": char_ids,
             "positional_encodings": pos_enc,
             "accuracy": accuracy,
-            "num_tokens": num_tokens,
             "dataset": dataset,
         }

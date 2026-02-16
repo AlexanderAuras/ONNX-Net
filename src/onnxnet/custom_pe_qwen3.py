@@ -15,20 +15,16 @@ class CustomPEQwen3(Qwen3ForSequenceClassification):
         input_ids: Tensor | None = None,
         attention_mask: Tensor | None = None,
         labels: Tensor | None = None,
-        node_ids: Tensor | None = None,
-        positional_encoding: Tensor | None = None,
+        token_pes: Tensor | None = None,
         **kwargs: Unpack[TransformersKwargs],
     ) -> SequenceClassifierOutputWithPast:
         print(type(input_ids), str(input_ids).replace("\n", "")[:100])
         print(type(attention_mask), str(attention_mask).replace("\n", "")[:100])
         print(type(labels), str(labels).replace("\n", "")[:100])
-        print(type(node_ids), str(node_ids).replace("\n", "")[:100])
-        print(type(positional_encoding), str(positional_encoding).replace("\n", "")[:100])
-        del kwargs["accuracy"]
-        del kwargs["num_tokens"]
-        del kwargs["dataset"]
+        print(type(token_pes), str(token_pes).replace("\n", "")[:100])
         inputs_embeds = self.model.embed_tokens(input_ids)
-        inputs_embeds += positional_encoding[node_ids]  # ty: ignore [not-subscriptable]
+        inputs_embeds += token_pes
+        del kwargs["token_pes"]
         transformer_outputs: BaseModelOutputWithPast = self.model(
             input_ids=None,
             attention_mask=attention_mask,
