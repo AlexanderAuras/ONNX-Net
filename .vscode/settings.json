@@ -24,19 +24,7 @@
         "HACK",
         "FIX",
     ],
-    "python.languageServer": "None", // "Pylance",
-    "ty.diagnosticMode": "workspace",
-    "ty.inlayHints.variableTypes": false,
-    "ty.inlayHints.callArgumentNames": false,
-    "python.analysis.diagnosticMode": "workspace",
-    "python.analysis.autoImportCompletions": true,
-    "python.analysis.importFormat": "absolute",
-    "python.analysis.inlayHints.functionReturnTypes": true,
-    "python.analysis.inlayHints.pytestParameters": true,
-    "python.analysis.fixAll": [
-        "source.convertImportFormat",
-    ],
-    "python.analysis.supportRestructuredText": true,
+    "python.languageServer": "None",
     "editor.formatOnSave": true,
     "editor.accessibilitySupport": "off",
     "github.copilot.enable": {
@@ -48,6 +36,7 @@
         "editor.insertSpaces": true
     },
     "accessibility.underlineLinks": true,
+    "python.analysis.supportRestructuredText": true,
     "files.autoSave": "onFocusChange",
     "debug.showVariableTypes": true,
     "python-envs.pythonProjects": [],

@@ -375,7 +375,7 @@ class DAG[N, E]:  # noqa: PLR0904
                     label=edge_labeler(edge.value) if edge_labeler is not None else None,
                 ),
             )
-        buffer = io.BytesIO(graph.create_png())  # pyright: ignore [reportAttributeAccessIssue]  # ty: ignore [unresolved-attribute]
+        buffer = io.BytesIO(graph.create_png())  # pyright: ignore [reportAttributeAccessIssue]
         return plt.imread(buffer)
 
     def collapse_edge(

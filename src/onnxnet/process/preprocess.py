@@ -1,31 +1,21 @@
 import argparse
-import csv
 import logging
 import multiprocessing
-import multiprocessing.synchronize
 from pathlib import Path
-import pickle  # noqa: S403
-import shutil
 import sys
 import warnings
 
 import numpy as np
-import numpy.typing as npt
 import onnx
 import onnxsim
 import tqdm
 import tqdm.contrib.logging
-from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
+from onnxnet.lmdb_dataset import LMDBDataset, LMDBDatasetWriter
 from onnxnet.process.onnx_graph_utils import encode_graph, onnx_to_graph
 
 
-def _init_process(out_file_lock: multiprocessing.synchronize.Lock) -> None:
-    global lock  # noqa: PLW0603  # ty: ignore [unresolved-global]
-    lock = out_file_lock
-
-
-def _process_onnx_file(args: tuple[argparse.Namespace, Path, PreTrainedTokenizerBase, npt.NDArray[np.float64]]) -> None:
+def _process_onnx_file(args: tuple[argparse.Namespace, Path]) -> None:
     """Preprocess ONNX models for encoding."""
     logger = logging.getLogger(__name__)
     try:
@@ -33,40 +23,29 @@ def _process_onnx_file(args: tuple[argparse.Namespace, Path, PreTrainedTokenizer
         onnx_model = onnx.shape_inference.infer_shapes(onnx_model)
         onnx_model = onnxsim.simplify(onnx_model)[0]
         graph = onnx_to_graph(onnx_model, ignore_multiple_inputs=True)
-        pos_enc = graph.generate_position_encodings(k_frac=0.2)
+        pos_enc = graph.generate_position_encodings(k_frac=args[0].k_frac)
         model_str, char_node_ids = encode_graph(graph, return_node_ids=True)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger = logging.getLogger(__name__)
         logger.error('Error processing file "%s": %s', args[1], e, exc_info=e)  # noqa: TRY400
         return
     try:
         acc = float(onnx_model.metadata_props[0].value)
-        with (
-            lock,  # ty: ignore [unresolved-reference]
-            args[0].out_dir.joinpath("metadata.csv").open("a", encoding="UTF-8", newline="") as f,
-        ):
-            csvwriter = csv.writer(f)
-            if f.tell() == 0:
-                csvwriter.writerow(["file_path", "accuracy", "dataset"])
-            csvwriter.writerow([
-                args[1].relative_to(args[0].in_dir).with_suffix("").as_posix(),
-                acc,
-                "cifar10",
-            ])
-        rel_path = args[1].relative_to(args[0].in_dir).with_suffix("").as_posix()
-        with args[0].out_dir.joinpath(rel_path).with_suffix(".mstr").open("w", encoding="UTF-8") as f:
-            f.write(model_str)
-        with args[0].out_dir.joinpath(rel_path).with_suffix(".chid").open("wb") as f:
-            pickle.dump(char_node_ids, f)
-        pos_enc = np.pad(pos_enc[:, :256], [(0, 0), (0, max(0, 256 - pos_enc.shape[1]))])
-        pos_enc = args[3] @ pos_enc[..., None]
-        np.save(args[0].out_dir.joinpath(rel_path).with_suffix(""), pos_enc[..., 0])
-    except Exception as e:
+        with LMDBDatasetWriter(args[0].out_file) as writer:
+            writer.add({
+                "file": args[1].relative_to(args[0].in_dir).with_suffix("").as_posix(),
+                "accuracy": acc,
+                "dataset": "cifar10",
+                "model_str": model_str,
+                "char_indices": np.array(char_node_ids),
+                "node_pos_encs": pos_enc,
+            })
+    except Exception as e:  # noqa: BLE001
         logger = logging.getLogger(__name__)
         logger.error('Error saving preprocessing results for file "%s": %s', args[1], e, exc_info=e)  # noqa: TRY400
 
 
-def main() -> None:  # noqa: C901, PLR0912, PLR0915
+def main() -> None:  # noqa: C901
     """Preprocess ONNX models for encoding."""
     argparser = argparse.ArgumentParser(description="Preprocess ONNX models for encoding.")
     _ = argparser.add_argument(
@@ -77,18 +56,11 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
         help="Format of the preprocessed data.",
     )
     _ = argparser.add_argument(
-        "-t",
-        "--tokenizer",
-        type=str,
-        default="Qwen/Qwen3-0.6B",  # "answerdotai/ModernBERT-base",
-        help="Pretrained tokenizer to use.",
-    )
-    _ = argparser.add_argument(
         "-o",
-        "--out-dir",
+        "--out-file",
         type=Path,
         default=None,
-        help="Directory to save the preprocessed data in.",
+        help="File to save the preprocessed data in.",
     )
     _ = argparser.add_argument(
         "-p",
@@ -103,6 +75,13 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
         type=int,
         default=multiprocessing.cpu_count(),
         help="Number of parallel processes to use.",
+    )
+    _ = argparser.add_argument(
+        "-k",
+        dest="k_frac",
+        type=float,
+        default=0.2,
+        help="Latent code size as percentage of graph node count.",
     )
     _ = argparser.add_argument(
         "in_dir",
@@ -127,35 +106,25 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
     elif not args.in_dir.is_dir():
         logger.critical('Input directory "%s" is not a directory', args.in_dir)
         sys.exit(-1)
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
-    except OSError as e:
-        logger.critical('Failed to load tokenizer "%s"', args.tokenizer, exc_info=e)
-        sys.exit(-1)
-    if args.out_dir is None:
-        args.out_dir = args.in_dir.parent / f"{args.in_dir.name}_preprocessed"
-        logger.info('Output directory not specified, using "%s"', args.out_dir)
+    if args.out_file is None:
+        args.out_file = args.in_dir.parent.joinpath(f"{args.in_dir.name}_preprocessed").with_suffix(".lmdb")
+        logger.info('Output file not specified, using "%s"', args.out_file)
     existing_outputs = set()
-    if args.out_dir.exists():
-        if not args.out_dir.is_dir():
-            logger.critical('Output directory "%s" exists and is not a directory', args.out_dir)
+    if args.out_file.exists():
+        if not args.out_file.is_file():
+            logger.critical('Output path "%s" exists and is not a file', args.out_file)
             sys.exit(-1)
         elif args.existing_output_policy == "error":
-            logger.critical('Output directory "%s" already exists', args.out_dir)
+            logger.critical('Output path "%s" already exists', args.out_file)
             sys.exit(-1)
         elif args.existing_output_policy == "delete":
-            logger.info('Clearing output directory "%s"', args.out_dir)
-            for out_file in args.out_dir.glob("**/*"):
-                if out_file.is_file():
-                    out_file.unlink()
-                elif out_file.is_dir():
-                    shutil.rmtree(out_file)
+            logger.info('Removing output file "%s"', args.out_file)
+            args.out_file.unlink()
         elif args.existing_output_policy == "skip":
             logger.info("Collecting existing output files")
-            for out_file in args.out_dir.glob("**/*.npy"):  # noqa: FURB142
-                existing_outputs.add(out_file.relative_to(args.out_dir).with_suffix("").as_posix())
-    else:
-        args.out_dir.mkdir(parents=True, exist_ok=True)
+            dataset = LMDBDataset(args.in_file)
+            for sample in dataset:  # noqa: FURB142
+                existing_outputs.add(sample["file"])
 
     todo = []
     for in_file in args.in_dir.glob("**/*.onnx"):
@@ -165,11 +134,9 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
     logger.info("Found %d files to process", len(todo))
 
     logger.info("Preprocessing files")
-    out_file_lock = multiprocessing.Lock()
-    random_projection = np.random.default_rng().standard_normal((512, 256)) / np.sqrt(256)
-    process_args = [(args, file, tokenizer, random_projection) for file in todo]
+    process_args = [(args, file) for file in todo]
     with (
-        multiprocessing.Pool(args.n_procs, initializer=_init_process, initargs=(out_file_lock,)) as process_pool,
+        multiprocessing.Pool(args.n_procs) as process_pool,
         tqdm.contrib.logging.logging_redirect_tqdm(),
     ):
         _ = list(
