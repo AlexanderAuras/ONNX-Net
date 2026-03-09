@@ -39,7 +39,6 @@
     "python.analysis.supportRestructuredText": true,
     "files.autoSave": "onFocusChange",
     "debug.showVariableTypes": true,
-    "python-envs.pythonProjects": [],
     "python.testing.pytestArgs": [
         "tests"
     ],

@@ -12,14 +12,14 @@ import pandas as pd
 from scipy import stats
 from sklearn.metrics import mean_absolute_error
 import torch
-from transformers import AutoTokenizer
+from transformers import AutoConfig, AutoTokenizer
 from transformers.models.auto.modeling_auto import AutoModelForSequenceClassification
-from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 from transformers.trainer import Trainer
 from transformers.trainer_utils import set_seed
 from transformers.training_args import TrainingArguments
 
 from onnxnet.custom_pe_collator import CustomPECollator
+from onnxnet.custom_pe_modernbert import CustomModernBert
 from onnxnet.custom_pe_qwen3 import CustomPEQwen3
 from onnxnet.lmdb_dataset import LMDBDataset
 from onnxnet.losses import (
@@ -45,6 +45,7 @@ NASBENCH101_VAL_INDICES = pickle.loads(  # noqa: S301
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu")  # ##################################################################### REMOVE
 
 parser = argparse.ArgumentParser()
 
@@ -87,7 +88,6 @@ parser.add_argument("--eval_strategy", type=str, default="epoch", choices=["step
 parser.add_argument("--flash_attention", type=bool, default=False)
 parser.add_argument("--gradient_checkpointing", type=bool, default=False)
 
-
 # Output params
 parser.add_argument("--output_path", type=Path, default=None)
 parser.add_argument("--save", type=bool, default=True)
@@ -97,7 +97,7 @@ args = parser.parse_args()
 
 data_name = args.data_path.parent.name
 run_name = f"eval_task{args.eval_path.name}_train_task{args.data_path.parent.name}_{args.loss_fn}_{data_name}\
-             _seed{args.seed}_lr{args.lr}_epochs{args.epochs}_frac42"
+            _seed{args.seed}_lr{args.lr}_epochs{args.epochs}_frac42"
 
 accelerator = Accelerator()
 if accelerator.is_main_process:
@@ -113,7 +113,7 @@ torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
 tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-pe_projection = torch.randn(4096, 256)
+pe_projection = torch.randn(1024, 256)
 
 
 def transform_sample(sample: dict[str, Any]) -> dict[str, Any]:
@@ -176,7 +176,17 @@ val_dataset = val_dataset.map(transform_sample)
 
 if args.model_name == "Qwen/Qwen3-0.6B":
     model = CustomPEQwen3(
-        Qwen3Config(
+        AutoConfig.from_pretrained(
+            "Qwen/Qwen3-0.6B",
+            num_labels=1,
+            problem_type="regression",
+            attn_implementation="flash_attention_2" if args.flash_attention else "sdpa",
+        ),
+    ).to(device)
+elif args.model_name == "answerdotai/ModernBERT-base":
+    model = CustomModernBert(
+        AutoConfig.from_pretrained(
+            "answerdotai/ModernBERT-base",
             num_labels=1,
             problem_type="regression",
             attn_implementation="flash_attention_2" if args.flash_attention else "sdpa",
@@ -210,6 +220,7 @@ with output_dir.joinpath("info.json").open("w", encoding="utf-8") as f:
     json.dump(vars(args), f, indent=4, default=str)
 
 training_args = TrainingArguments(
+    use_cpu=True,
     seed=args.seed,
     output_dir=output_dir,
     eval_strategy=args.eval_strategy,
@@ -234,7 +245,6 @@ training_args = TrainingArguments(
     bf16_full_eval=True,
     gradient_checkpointing=args.gradient_checkpointing,
 )
-
 
 data_collator = CustomPECollator(tokenizer)
 universal_trainer_params = {

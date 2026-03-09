@@ -1,4 +1,4 @@
-from typing import override
+from typing import cast, override
 
 import torch
 from torch import Tensor
@@ -18,13 +18,9 @@ class CustomPEQwen3(Qwen3ForSequenceClassification):
         token_pes: Tensor | None = None,
         **kwargs: Unpack[TransformersKwargs],
     ) -> SequenceClassifierOutputWithPast:
-        print(type(input_ids), str(input_ids).replace("\n", "")[:100])
-        print(type(attention_mask), str(attention_mask).replace("\n", "")[:100])
-        print(type(labels), str(labels).replace("\n", "")[:100])
-        print(type(token_pes), str(token_pes).replace("\n", "")[:100])
-        inputs_embeds = self.model.embed_tokens(input_ids)
-        inputs_embeds += token_pes
-        del kwargs["token_pes"]
+        with torch.no_grad():
+            inputs_embeds_raw = self.model.embed_tokens(input_ids)
+            inputs_embeds = inputs_embeds_raw + cast("Tensor", token_pes).to(inputs_embeds_raw.dtype)
         transformer_outputs: BaseModelOutputWithPast = self.model(
             input_ids=None,
             attention_mask=attention_mask,

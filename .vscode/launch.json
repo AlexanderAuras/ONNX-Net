@@ -6,16 +6,21 @@
             "type": "debugpy",
             "python": "${command:python.interpreterPath}",
             "request": "launch",
-            "program": "${file}",
+            "program": "${workspaceFolder}/src/onnxnet/tuning.py",
             "console": "integratedTerminal",
             "pythonArgs": [
                 "-Wd"
             ],
             "justMyCode": false,
-            "args": [],
+            "args": [
+                "--data_path=data/nasbench101.lmdb",
+                "--eval_path=data/nasbench101.lmdb",
+                "--train_size=5000",
+                "--batch_size=16",
+                "--output_path=out",
+            ],
             "env": {},
-        },
-        /*
+        },/*{
             "name": "Python Debugger: Main",
             "type": "debugpy",
             "python": "${command:python.interpreterPath}",
