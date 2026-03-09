@@ -220,7 +220,7 @@ with output_dir.joinpath("info.json").open("w", encoding="utf-8") as f:
     json.dump(vars(args), f, indent=4, default=str)
 
 training_args = TrainingArguments(
-    use_cpu=True,
+    # use_cpu=True,
     seed=args.seed,
     output_dir=output_dir,
     eval_strategy=args.eval_strategy,
@@ -252,7 +252,6 @@ universal_trainer_params = {
     "args": training_args,
     "train_dataset": train_dataset,
     "eval_dataset": val_dataset,
-    # "processing_class": tokenizer,
     "compute_metrics": compute_metrics,
     "data_collator": data_collator,
 }

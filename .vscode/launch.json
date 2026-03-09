@@ -18,6 +18,7 @@
                 "--train_size=5000",
                 "--batch_size=16",
                 "--output_path=out",
+                "--gradient_checkpointing=True",
             ],
             "env": {},
         },/*{

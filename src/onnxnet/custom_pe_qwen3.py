@@ -1,14 +1,19 @@
-from typing import cast, override
+from typing import override
 
 import torch
 from torch import Tensor
 from transformers import Qwen3ForSequenceClassification
+from transformers.loss.loss_utils import ForSequenceClassificationLoss
 from transformers.modeling_outputs import BaseModelOutputWithPast, SequenceClassifierOutputWithPast
 from transformers.processing_utils import Unpack
 from transformers.utils import TransformersKwargs
 
 
 class CustomPEQwen3(Qwen3ForSequenceClassification):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.loss_function = ForSequenceClassificationLoss
+
     @override
     def forward(
         self,
@@ -18,11 +23,12 @@ class CustomPEQwen3(Qwen3ForSequenceClassification):
         token_pes: Tensor | None = None,
         **kwargs: Unpack[TransformersKwargs],
     ) -> SequenceClassifierOutputWithPast:
-        with torch.no_grad():
-            inputs_embeds_raw = self.model.embed_tokens(input_ids)
-            inputs_embeds = inputs_embeds_raw + cast("Tensor", token_pes).to(inputs_embeds_raw.dtype)
-        transformer_outputs: BaseModelOutputWithPast = self.model(
-            input_ids=None,
+        base_model = getattr(self, self.base_model_prefix)
+        # inputs_embeds_raw = base_model.embed_tokens(input_ids)
+        # inputs_embeds = inputs_embeds_raw + cast("Tensor", token_pes).to(inputs_embeds_raw.dtype)
+        inputs_embeds = None
+        transformer_outputs: BaseModelOutputWithPast = base_model(
+            input_ids=input_ids,  # aasdhisdfh siduhfisdf
             attention_mask=attention_mask,
             position_ids=None,
             past_key_values=None,
@@ -31,6 +37,7 @@ class CustomPEQwen3(Qwen3ForSequenceClassification):
             **kwargs,
         )
         hidden_states = transformer_outputs.last_hidden_state
+        hidden_states = hidden_states.to(self.score.weight.dtype)  # HACK
         logits = self.score(hidden_states)
 
         if input_ids is not None:
@@ -55,7 +62,12 @@ class CustomPEQwen3(Qwen3ForSequenceClassification):
 
         loss = None
         if labels is not None:
-            loss = self.loss_function(logits=logits, labels=labels, pooled_logits=pooled_logits, config=self.config)
+            loss = self.loss_function(
+                logits=logits,
+                labels=labels,
+                pooled_logits=pooled_logits,
+                config=self.config,
+            )
 
         return SequenceClassifierOutputWithPast(
             loss=loss,

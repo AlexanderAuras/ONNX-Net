@@ -5,6 +5,8 @@ from transformers import DataCollatorWithPadding
 
 class CustomPECollator(DataCollatorWithPadding):
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
+        if "token_pes" not in features[0]:
+            return super().__call__(features)
         token_pes = [f["token_pes"] for f in features]
         max_len = max(len(t) for t in token_pes)
         hidden_dim = len(features[0]["token_pes"][0])
