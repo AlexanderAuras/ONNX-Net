@@ -166,13 +166,13 @@ if not args.eval_path.exists():
 if args.eval_path.is_dir():
     msg = f'Eval path "{args.eval_path}"' + " is a directory, expected a file"
     raise ValueError(msg)
-val_dataset = LMDBDataset(args.eval_path)
+raw_val_dataset = LMDBDataset(args.eval_path)
 if args.eval_path.with_suffix("").name == "nasbench101":
-    val_dataset = val_dataset.subset(NASBENCH101_VAL_INDICES)
+    raw_val_dataset = raw_val_dataset.subset(NASBENCH101_VAL_INDICES)
 else:
     msg = "Unknown dataset"
     raise ValueError(msg)
-val_dataset = val_dataset.map(transform_sample)
+val_dataset = raw_val_dataset.map(transform_sample)
 
 if args.model_name == "Qwen/Qwen3-0.6B":
     model = CustomPEQwen3(
@@ -220,7 +220,7 @@ with output_dir.joinpath("info.json").open("w", encoding="utf-8") as f:
     json.dump(vars(args), f, indent=4, default=str)
 
 training_args = TrainingArguments(
-    # use_cpu=True,
+    use_cpu=True,
     seed=args.seed,
     output_dir=output_dir,
     eval_strategy=args.eval_strategy,
@@ -281,12 +281,12 @@ else:
     msg = f"Loss function {args.loss_fn} not recognized"
     raise ValueError(msg)
 
-trainer.train()
+# trainer.train()
 
 # Pred & Save
 if args.save_pred:
     preds = trainer.predict(cast("torch.utils.data.Dataset[dict[str, Any]]", val_dataset))
     preds = pd.DataFrame(cast("npt.NDArray[np.float64]", preds.predictions).flatten(), columns=["pred"])  # ty: ignore [invalid-argument-type]
-    preds["true"] = [x["accuracy"] for x in val_dataset]
-    preds["dataset"] = [x["dataset"] for x in val_dataset]
+    preds["true"] = [x["accuracy"] for x in raw_val_dataset]
+    preds["dataset"] = [x["dataset"] for x in raw_val_dataset]
     preds.to_csv(output_dir / "preds.csv", index=False)
