@@ -475,7 +475,7 @@ class DAG[N, E]:  # noqa: PLR0904
         in_degrees = self.degree_matrix(direction="in", insert_self_loops=True)
         # Use "SVDFormer" structure matrix with "Edge-augmented Graph Transformer"'s SVD approach
         matrix = out_degrees.power(-0.5) @ (adjacency + sp.sparse.identity(len(self.__nodes))) @ in_degrees.power(-0.5)
-        U, S, Vt = sp.sparse.linalg.svds(matrix, k=int(k_frac * len(self.__nodes)), which="LM")  # noqa: N806
+        U, S, Vt = sp.sparse.linalg.svds(matrix, k=int(k_frac * (len(self.__nodes) - 1)), which="LM")  # noqa: N806
         idx = np.argsort(S)[::-1]
         U, S, Vt = U[:, idx], S[idx], Vt[idx]  # noqa: N806 # pyright: ignore [reportConstantRedefinition]
         V = Vt.T  # noqa: N806
